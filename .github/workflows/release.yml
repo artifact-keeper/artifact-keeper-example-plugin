@@ -1,0 +1,57 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build & Publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1
+
+      - name: Build WASM component
+        run: cargo build --release --target wasm32-wasip1
+
+      - name: Prepare release archive
+        run: |
+          mkdir -p release-staging
+          cp target/wasm32-wasip1/release/unity_format_plugin.wasm release-staging/plugin.wasm
+          cp plugin.toml release-staging/
+          cp README.md release-staging/
+          cp LICENSE release-staging/
+          cp -r wit release-staging/
+          cd release-staging && zip -r ../unity-format-plugin-${{ github.ref_name }}.zip .
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: unity-format-plugin-${{ github.ref_name }}.zip
+          generate_release_notes: true
+          body: |
+            ## Install into Artifact Keeper
+
+            **Option A - ZIP upload (easiest):**
+            Download the `.zip` below and upload it:
+            ```bash
+            curl -X POST https://your-registry/api/v1/plugins/install/zip \
+              -H "Authorization: Bearer $TOKEN" \
+              -F "file=@unity-format-plugin-${{ github.ref_name }}.zip"
+            ```
+
+            **Option B - Git install:**
+            ```bash
+            curl -X POST https://your-registry/api/v1/plugins/install/git \
+              -H "Authorization: Bearer $TOKEN" \
+              -H "Content-Type: application/json" \
+              -d '{"url": "https://github.com/artifact-keeper/artifact-keeper-example-plugin.git", "ref": "${{ github.ref_name }}"}'
+            ```
