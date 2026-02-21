@@ -2,7 +2,7 @@
 
 ## Overview
 
-The artifact-keeper example plugin is a Rust WASM plugin template using wit-bindgen. It compiles to wasm32-wasip1 and implements the FormatHandler WIT contract.
+The artifact-keeper example plugin is a Rust WASM plugin template using wit-bindgen. It compiles to wasm32-wasip2 and implements the FormatHandler WIT contract.
 
 ## Test Inventory
 
@@ -32,7 +32,7 @@ cargo test --target $(rustc -vV | grep host | awk '{print $2}')
 ### Build WASM
 ```bash
 cargo build --release
-# Output: target/wasm32-wasip1/release/unity_format_plugin.wasm
+# Output: target/wasm32-wasip2/release/unity_format_plugin.wasm
 ```
 
 ## Gaps and Roadmap

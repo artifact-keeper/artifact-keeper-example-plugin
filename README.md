@@ -15,7 +15,7 @@ Use this repo as a starting point for building your own plugins. Fork it, change
 ## Prerequisites
 
 - [Rust](https://rustup.rs/) (stable)
-- The `wasm32-wasip1` target (installed automatically via `rust-toolchain.toml`)
+- The `wasm32-wasip2` target (installed automatically via `rust-toolchain.toml`)
 
 ## Build
 
@@ -27,7 +27,7 @@ cd artifact-keeper-example-plugin
 # Build the WASM component
 cargo build --release
 
-# Output: target/wasm32-wasip1/release/unity_format_plugin.wasm
+# Output: target/wasm32-wasip2/release/unity_format_plugin.wasm
 ```
 
 ## Test
