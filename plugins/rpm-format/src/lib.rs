@@ -32,7 +32,7 @@ struct RpmFormatHandler;
 
 impl Guest for RpmFormatHandler {
     fn format_key() -> String {
-        "rpm".to_string()
+        "rpm-custom".to_string()
     }
 
     fn parse_metadata(path: String, data: Vec<u8>) -> Result<Metadata, String> {
@@ -130,7 +130,7 @@ impl Guest for RpmFormatHandler {
             .collect();
 
         let index = serde_json::json!({
-            "format": "rpm",
+            "format": "rpm-custom",
             "total_count": artifacts.len(),
             "total_size_bytes": artifacts.iter().map(|a| a.size_bytes).sum::<u64>(),
             "packages": entries,
@@ -227,7 +227,7 @@ mod tests {
 
     #[test]
     fn format_key_is_rpm() {
-        assert_eq!(RpmFormatHandler::format_key(), "rpm");
+        assert_eq!(RpmFormatHandler::format_key(), "rpm-custom");
     }
 
     // -- RPM filename parsing --
@@ -390,7 +390,7 @@ mod tests {
         assert_eq!(result[0].0, "rpm-index.json");
 
         let json: serde_json::Value = serde_json::from_slice(&result[0].1).unwrap();
-        assert_eq!(json["format"], "rpm");
+        assert_eq!(json["format"], "rpm-custom");
         assert_eq!(json["total_count"], 2);
         assert_eq!(json["total_size_bytes"], 12288);
 
