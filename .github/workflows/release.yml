@@ -19,39 +19,66 @@ jobs:
         with:
           targets: wasm32-wasip2
 
-      - name: Build WASM component
-        run: cargo build --release --target wasm32-wasip2
+      - name: Build all WASM plugins
+        run: cargo build --release --target wasm32-wasip2 --workspace
 
-      - name: Prepare release archive
+      - name: Package Unity plugin
         run: |
-          mkdir -p release-staging
-          cp target/wasm32-wasip2/release/unity_format_plugin.wasm release-staging/plugin.wasm
-          cp plugin.toml release-staging/
-          cp README.md release-staging/
-          cp LICENSE release-staging/
-          cp -r wit release-staging/
-          cd release-staging && zip -r ../unity-format-plugin-${{ github.ref_name }}.zip .
+          mkdir -p staging/unity-format
+          cp target/wasm32-wasip2/release/unity_format_plugin.wasm staging/unity-format/plugin.wasm
+          cp plugins/unity-format/plugin.toml staging/unity-format/
+          cp README.md LICENSE staging/unity-format/
+          cp -r wit staging/unity-format/
+          cd staging/unity-format && zip -r ../../unity-format-plugin-${{ github.ref_name }}.zip .
+
+      - name: Package RPM plugin
+        run: |
+          mkdir -p staging/rpm-format
+          cp target/wasm32-wasip2/release/rpm_format_plugin.wasm staging/rpm-format/plugin.wasm
+          cp plugins/rpm-format/plugin.toml staging/rpm-format/
+          cp README.md LICENSE staging/rpm-format/
+          cp -r wit staging/rpm-format/
+          cd staging/rpm-format && zip -r ../../rpm-format-plugin-${{ github.ref_name }}.zip .
+
+      - name: Package PyPI plugin
+        run: |
+          mkdir -p staging/pypi-format
+          cp target/wasm32-wasip2/release/pypi_format_plugin.wasm staging/pypi-format/plugin.wasm
+          cp plugins/pypi-format/plugin.toml staging/pypi-format/
+          cp README.md LICENSE staging/pypi-format/
+          cp -r wit staging/pypi-format/
+          cd staging/pypi-format && zip -r ../../pypi-format-plugin-${{ github.ref_name }}.zip .
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: unity-format-plugin-${{ github.ref_name }}.zip
+          files: |
+            unity-format-plugin-${{ github.ref_name }}.zip
+            rpm-format-plugin-${{ github.ref_name }}.zip
+            pypi-format-plugin-${{ github.ref_name }}.zip
           generate_release_notes: true
           body: |
             ## Install into Artifact Keeper
 
-            **Option A - ZIP upload (easiest):**
-            Download the `.zip` below and upload it:
+            Download a plugin ZIP below and upload it:
             ```bash
             curl -X POST https://your-registry/api/v1/plugins/install/zip \
               -H "Authorization: Bearer $TOKEN" \
-              -F "file=@unity-format-plugin-${{ github.ref_name }}.zip"
+              -F "file=@<plugin-name>-${{ github.ref_name }}.zip"
             ```
 
-            **Option B - Git install:**
+            Or install directly from this Git repo:
             ```bash
             curl -X POST https://your-registry/api/v1/plugins/install/git \
               -H "Authorization: Bearer $TOKEN" \
               -H "Content-Type: application/json" \
               -d '{"url": "https://github.com/artifact-keeper/artifact-keeper-example-plugin.git", "ref": "${{ github.ref_name }}"}'
             ```
+
+            ## Included Plugins
+
+            | Plugin | Format Key | Description |
+            |--------|-----------|-------------|
+            | unity-format | `unity` | Unity .unitypackage handler |
+            | rpm-format | `rpm` | RPM package handler |
+            | pypi-format | `pypi` | Python wheel/sdist handler |

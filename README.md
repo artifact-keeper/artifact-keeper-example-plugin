@@ -1,16 +1,16 @@
-# Artifact Keeper Example Plugin
+# Artifact Keeper Example Plugins
 
-A fully working example of a custom format handler plugin for [Artifact Keeper](https://github.com/artifact-keeper/artifact-keeper). This plugin handles **Unity `.unitypackage`** files (gzipped tarballs), demonstrating real-world format validation, metadata extraction, and index generation.
+A collection of working example plugins for [Artifact Keeper](https://github.com/artifact-keeper/artifact-keeper). Each plugin implements a custom format handler using the WASM Component Model and the `artifact-keeper:format@1.0.0` WIT contract.
 
-Use this repo as a starting point for building your own plugins. Fork it, change the format key, and implement your logic.
+Use these as starting points for building your own plugins. Fork, change the format key, and implement your logic.
 
-## What this plugin does
+## Included plugins
 
-| Capability | Description |
-|------------|-------------|
-| **Validate** | Checks gzip magic bytes and correct file extension |
-| **Parse metadata** | Extracts version from path/filename, detects content type |
-| **Generate index** | Creates a `unity-index.json` listing all packages in a repository |
+| Plugin | Format Key | What it demonstrates |
+|--------|-----------|---------------------|
+| [Unity](plugins/unity-format/) | `unity` | Gzip magic byte validation, path-based version extraction, JSON index |
+| [RPM](plugins/rpm-format/) | `rpm` | Binary format validation (RPM lead magic), right-to-left filename parsing, structured metadata |
+| [PyPI](plugins/pypi-format/) | `pypi` | PEP 427 wheel parsing, PEP 503 name normalization, HTML + JSON index generation |
 
 ## Prerequisites
 
@@ -20,14 +20,16 @@ Use this repo as a starting point for building your own plugins. Fork it, change
 ## Build
 
 ```bash
-# Clone this repo
 git clone https://github.com/artifact-keeper/artifact-keeper-example-plugin.git
 cd artifact-keeper-example-plugin
 
-# Build the WASM component
+# Build all plugins
 cargo build --release
 
-# Output: target/wasm32-wasip2/release/unity_format_plugin.wasm
+# Build a specific plugin
+cargo build --release -p rpm-format-plugin
+
+# Output: target/wasm32-wasip2/release/<plugin_name>.wasm
 ```
 
 ## Test
@@ -35,7 +37,11 @@ cargo build --release
 Unit tests run on the host target (not WASM):
 
 ```bash
-cargo test --target $(rustc -vV | grep host | awk '{print $2}')
+# All plugins
+cargo test --target $(rustc -vV | grep host | awk '{print $2}') --workspace
+
+# Single plugin
+cargo test --target $(rustc -vV | grep host | awk '{print $2}') -p pypi-format-plugin
 ```
 
 ## Install into Artifact Keeper
@@ -54,12 +60,12 @@ curl -X POST https://your-registry/api/v1/plugins/install/git \
 
 ### From ZIP (release artifact)
 
-Download the ZIP from the [Releases](https://github.com/artifact-keeper/artifact-keeper-example-plugin/releases) page, then:
+Download a plugin ZIP from the [Releases](https://github.com/artifact-keeper/artifact-keeper-example-plugin/releases) page, then:
 
 ```bash
 curl -X POST https://your-registry/api/v1/plugins/install/zip \
   -H "Authorization: Bearer $TOKEN" \
-  -F "file=@unity-format-plugin-v0.1.0.zip"
+  -F "file=@rpm-format-plugin-v0.1.0.zip"
 ```
 
 ### From local path
@@ -73,7 +79,7 @@ curl -X POST https://your-registry/api/v1/plugins/install/local \
 
 ## Create your own plugin
 
-1. **Fork this repo** or use it as a template
+1. **Copy one of the example plugins** as a starting point (the Unity plugin is the simplest)
 2. Update `plugin.toml` with your format key, extensions, and description
 3. Implement the four functions in `src/lib.rs`:
    - `format_key()` -- return your unique format identifier
@@ -87,18 +93,29 @@ curl -X POST https://your-registry/api/v1/plugins/install/local \
 
 ```
 .
-├── .cargo/config.toml      # Default WASM target
-├── .github/workflows/
-│   ├── ci.yml              # Lint + test + build on push/PR
-│   └── release.yml         # Build + package + GitHub Release on tag
-├── src/lib.rs              # Plugin implementation
-├── wit/format-plugin.wit   # WIT contract (from Artifact Keeper)
-├── plugin.toml             # Plugin manifest
-├── Cargo.toml              # Rust project config
-└── rust-toolchain.toml     # Rust toolchain + WASM target
+├── Cargo.toml                 # Workspace root
+├── .cargo/config.toml         # Default WASM target (wasm32-wasip2)
+├── rust-toolchain.toml        # Rust stable + WASM target
+├── wit/format-plugin.wit      # Shared WIT contract
+├── plugins/
+│   ├── unity-format/          # Unity .unitypackage handler
+│   │   ├── Cargo.toml
+│   │   ├── plugin.toml
+│   │   └── src/lib.rs
+│   ├── rpm-format/            # RPM package handler
+│   │   ├── Cargo.toml
+│   │   ├── plugin.toml
+│   │   └── src/lib.rs
+│   └── pypi-format/           # Python wheel/sdist handler
+│       ├── Cargo.toml
+│       ├── plugin.toml
+│       └── src/lib.rs
+└── .github/workflows/
+    ├── ci.yml                 # Lint + test + build on push/PR
+    └── release.yml            # Build + package + GitHub Release on tag
 ```
 
-## WIT Interface
+## WIT interface
 
 Plugins implement the `artifact-keeper:format@1.0.0` interface:
 

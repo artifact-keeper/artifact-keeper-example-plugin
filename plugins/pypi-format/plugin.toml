@@ -1,0 +1,24 @@
+[plugin]
+name = "pypi-format"
+version = "0.1.0"
+description = "Format handler for Python packages (wheels and source distributions)"
+author = "Artifact Keeper Team"
+license = "MIT"
+homepage = "https://github.com/artifact-keeper/artifact-keeper-example-plugin"
+min_keeper_version = "1.0.0"
+
+[format]
+key = "pypi"
+display_name = "Python Package"
+extensions = [".whl", ".tar.gz", ".zip"]
+content_types = ["application/zip", "application/gzip"]
+
+[capabilities]
+parse_metadata = true
+validate_artifact = true
+generate_index = true
+
+[resources]
+max_memory_bytes = 16777216   # 16 MB
+max_fuel = 100000000          # 100M cycles
+max_execution_ms = 10000      # 10 seconds

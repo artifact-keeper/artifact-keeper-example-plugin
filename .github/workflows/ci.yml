@@ -33,19 +33,31 @@ jobs:
         run: cargo fmt --check
 
       - name: Clippy (WASM target)
-        run: cargo clippy --target wasm32-wasip2 -- -D warnings
+        run: cargo clippy --target wasm32-wasip2 --workspace -- -D warnings
 
       - name: Unit tests (host target)
-        run: cargo test --target x86_64-unknown-linux-gnu
+        run: cargo test --target x86_64-unknown-linux-gnu --workspace
 
-      - name: Build WASM component
-        run: cargo build --release --target wasm32-wasip2
+      - name: Build WASM plugins
+        run: cargo build --release --target wasm32-wasip2 --workspace
 
-      - name: Upload plugin artifact
+      - name: Upload Unity plugin
         uses: actions/upload-artifact@v4
         with:
-          name: plugin-wasm
+          name: unity-format-plugin
           path: target/wasm32-wasip2/release/unity_format_plugin.wasm
+
+      - name: Upload RPM plugin
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpm-format-plugin
+          path: target/wasm32-wasip2/release/rpm_format_plugin.wasm
+
+      - name: Upload PyPI plugin
+        uses: actions/upload-artifact@v4
+        with:
+          name: pypi-format-plugin
+          path: target/wasm32-wasip2/release/pypi_format_plugin.wasm
 
       - name: SonarCloud Scan
         uses: SonarSource/sonarqube-scan-action@v5
