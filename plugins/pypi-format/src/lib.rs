@@ -22,15 +22,18 @@
 //! ```
 
 wit_bindgen::generate!({
-    world: "format-plugin",
+    world: "format-plugin-v2",
     path: "../../wit/format-plugin.wit",
 });
 
-use exports::artifact_keeper::format::handler::{Guest, Metadata};
+use exports::artifact_keeper::format::handler::{Guest as HandlerGuest, Metadata};
+use exports::artifact_keeper::format::request_handler::{
+    Guest as RequestHandlerGuest, HttpRequest, HttpResponse, RepoContext,
+};
 
 struct PypiFormatHandler;
 
-impl Guest for PypiFormatHandler {
+impl HandlerGuest for PypiFormatHandler {
     fn format_key() -> String {
         "pypi-custom".to_string()
     }
@@ -175,7 +178,171 @@ impl Guest for PypiFormatHandler {
     }
 }
 
+impl RequestHandlerGuest for PypiFormatHandler {
+    fn handle_request(
+        request: HttpRequest,
+        context: RepoContext,
+        artifacts: Vec<Metadata>,
+    ) -> Result<HttpResponse, String> {
+        let path = request.path.as_str();
+
+        // Only handle GET and HEAD
+        if request.method != "GET" && request.method != "HEAD" {
+            return Ok(HttpResponse {
+                status: 405,
+                headers: vec![("allow".to_string(), "GET, HEAD".to_string())],
+                body: b"Method Not Allowed".to_vec(),
+            });
+        }
+
+        // Route: /simple/ - PEP 503 root index
+        if path == "/simple/" || path == "/simple" || path == "/" {
+            return handle_simple_root(&context, &artifacts);
+        }
+
+        // Route: /simple/{project}/ - PEP 503 project page
+        let trimmed = path.trim_end_matches('/');
+        if let Some(project) = trimmed.strip_prefix("/simple/") {
+            if !project.contains('/') && !project.is_empty() {
+                return handle_simple_project(project, &context, &artifacts);
+            }
+        }
+
+        // Route: /packages/{filename} - redirect to download
+        if let Some(filename) = trimmed.strip_prefix("/packages/") {
+            if !filename.contains('/') && !filename.is_empty() {
+                return handle_package_download(filename, &context, &artifacts);
+            }
+        }
+
+        // 404 for everything else
+        Ok(HttpResponse {
+            status: 404,
+            headers: vec![("content-type".to_string(), "text/plain".to_string())],
+            body: b"Not Found".to_vec(),
+        })
+    }
+}
+
 export!(PypiFormatHandler);
+
+// ---------------------------------------------------------------------------
+// Request handler helpers
+// ---------------------------------------------------------------------------
+
+/// PEP 503 root index: list all normalized package names as links.
+fn handle_simple_root(
+    context: &RepoContext,
+    artifacts: &[Metadata],
+) -> Result<HttpResponse, String> {
+    let mut packages: Vec<String> = artifacts
+        .iter()
+        .filter_map(|a| {
+            let filename = a.path.rsplit('/').next()?;
+            extract_package_name(filename).map(|n| normalize_package_name(&n))
+        })
+        .collect();
+    packages.sort();
+    packages.dedup();
+
+    let mut html =
+        String::from("<!DOCTYPE html>\n<html>\n<head><title>Simple Index</title></head>\n<body>\n");
+    for pkg in &packages {
+        html.push_str(&format!(
+            "  <a href=\"{}/simple/{}/\">{}</a>\n",
+            context.base_url, pkg, pkg
+        ));
+    }
+    html.push_str("</body>\n</html>\n");
+
+    Ok(HttpResponse {
+        status: 200,
+        headers: vec![("content-type".to_string(), "text/html".to_string())],
+        body: html.into_bytes(),
+    })
+}
+
+/// PEP 503 project page: list files for a specific package with `#sha256=` fragments.
+fn handle_simple_project(
+    project: &str,
+    context: &RepoContext,
+    artifacts: &[Metadata],
+) -> Result<HttpResponse, String> {
+    let normalized_project = normalize_package_name(project);
+
+    // Filter artifacts matching this project
+    let matching: Vec<&Metadata> = artifacts
+        .iter()
+        .filter(|a| {
+            let filename = a.path.rsplit('/').next().unwrap_or(&a.path);
+            extract_package_name(filename)
+                .map(|n| normalize_package_name(&n) == normalized_project)
+                .unwrap_or(false)
+        })
+        .collect();
+
+    if matching.is_empty() {
+        return Ok(HttpResponse {
+            status: 404,
+            headers: vec![("content-type".to_string(), "text/plain".to_string())],
+            body: format!("Project '{}' not found", project).into_bytes(),
+        });
+    }
+
+    let mut html = format!(
+        "<!DOCTYPE html>\n<html>\n<head><title>Links for {}</title></head>\n<body>\n\
+         <h1>Links for {}</h1>\n",
+        normalized_project, normalized_project
+    );
+
+    for artifact in &matching {
+        let filename = artifact.path.rsplit('/').next().unwrap_or(&artifact.path);
+        let hash_fragment = match &artifact.checksum_sha256 {
+            Some(sha) if !sha.is_empty() => format!("#sha256={}", sha),
+            _ => String::new(),
+        };
+        html.push_str(&format!(
+            "  <a href=\"{}/packages/{}{}\">{}</a>\n",
+            context.base_url, filename, hash_fragment, filename
+        ));
+    }
+
+    html.push_str("</body>\n</html>\n");
+
+    Ok(HttpResponse {
+        status: 200,
+        headers: vec![("content-type".to_string(), "text/html".to_string())],
+        body: html.into_bytes(),
+    })
+}
+
+/// Redirect package download to the artifact storage download endpoint.
+fn handle_package_download(
+    filename: &str,
+    context: &RepoContext,
+    artifacts: &[Metadata],
+) -> Result<HttpResponse, String> {
+    // Find the artifact matching this filename
+    let artifact = artifacts
+        .iter()
+        .find(|a| a.path.rsplit('/').next().unwrap_or(&a.path) == filename);
+
+    match artifact {
+        Some(a) => {
+            let download_url = format!("{}/{}", context.download_base_url, a.path);
+            Ok(HttpResponse {
+                status: 302,
+                headers: vec![("location".to_string(), download_url)],
+                body: Vec::new(),
+            })
+        }
+        None => Ok(HttpResponse {
+            status: 404,
+            headers: vec![("content-type".to_string(), "text/plain".to_string())],
+            body: format!("Package '{}' not found", filename).into_bytes(),
+        }),
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -484,5 +651,157 @@ mod tests {
             .unwrap();
         let html = String::from_utf8(result[0].1.clone()).unwrap();
         assert!(html.contains("my-package"));
+    }
+
+    // -- handle_request (PEP 503) --
+
+    fn test_context() -> RepoContext {
+        RepoContext {
+            repo_key: "pypi-test".to_string(),
+            base_url: "http://localhost:8080/ext/pypi-custom/pypi-test".to_string(),
+            download_base_url: "http://localhost:8080/api/v1/repositories/pypi-test/download"
+                .to_string(),
+        }
+    }
+
+    fn test_artifacts() -> Vec<Metadata> {
+        vec![
+            Metadata {
+                path: "requests-2.28.0-py3-none-any.whl".into(),
+                version: Some("2.28.0".into()),
+                content_type: "application/zip".into(),
+                size_bytes: 2048,
+                checksum_sha256: Some("abc123".into()),
+            },
+            Metadata {
+                path: "requests-2.28.0.tar.gz".into(),
+                version: Some("2.28.0".into()),
+                content_type: "application/gzip".into(),
+                size_bytes: 4096,
+                checksum_sha256: Some("def456".into()),
+            },
+            Metadata {
+                path: "numpy-1.24.2-cp311-cp311-manylinux_2_17_x86_64.whl".into(),
+                version: Some("1.24.2".into()),
+                content_type: "application/zip".into(),
+                size_bytes: 8192,
+                checksum_sha256: None,
+            },
+        ]
+    }
+
+    fn get_request(path: &str) -> HttpRequest {
+        HttpRequest {
+            method: "GET".to_string(),
+            path: path.to_string(),
+            query: String::new(),
+            headers: Vec::new(),
+            body: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn handle_request_simple_root() {
+        let resp = PypiFormatHandler::handle_request(
+            get_request("/simple/"),
+            test_context(),
+            test_artifacts(),
+        )
+        .unwrap();
+        assert_eq!(resp.status, 200);
+        let body = String::from_utf8(resp.body).unwrap();
+        assert!(body.contains("numpy"));
+        assert!(body.contains("requests"));
+        assert!(body.contains("/ext/pypi-custom/pypi-test/simple/"));
+    }
+
+    #[test]
+    fn handle_request_root_redirects_to_simple() {
+        let resp =
+            PypiFormatHandler::handle_request(get_request("/"), test_context(), test_artifacts())
+                .unwrap();
+        assert_eq!(resp.status, 200);
+        let body = String::from_utf8(resp.body).unwrap();
+        assert!(body.contains("Simple Index"));
+    }
+
+    #[test]
+    fn handle_request_project_page() {
+        let resp = PypiFormatHandler::handle_request(
+            get_request("/simple/requests/"),
+            test_context(),
+            test_artifacts(),
+        )
+        .unwrap();
+        assert_eq!(resp.status, 200);
+        let body = String::from_utf8(resp.body).unwrap();
+        assert!(body.contains("requests-2.28.0-py3-none-any.whl"));
+        assert!(body.contains("requests-2.28.0.tar.gz"));
+        assert!(body.contains("#sha256=abc123"));
+        assert!(body.contains("#sha256=def456"));
+        // Should NOT contain numpy
+        assert!(!body.contains("numpy"));
+    }
+
+    #[test]
+    fn handle_request_project_not_found() {
+        let resp = PypiFormatHandler::handle_request(
+            get_request("/simple/nonexistent/"),
+            test_context(),
+            test_artifacts(),
+        )
+        .unwrap();
+        assert_eq!(resp.status, 404);
+    }
+
+    #[test]
+    fn handle_request_package_download_redirect() {
+        let resp = PypiFormatHandler::handle_request(
+            get_request("/packages/requests-2.28.0-py3-none-any.whl"),
+            test_context(),
+            test_artifacts(),
+        )
+        .unwrap();
+        assert_eq!(resp.status, 302);
+        let location = resp.headers.iter().find(|(k, _)| k == "location").unwrap();
+        assert!(location
+            .1
+            .contains("/download/requests-2.28.0-py3-none-any.whl"));
+    }
+
+    #[test]
+    fn handle_request_package_not_found() {
+        let resp = PypiFormatHandler::handle_request(
+            get_request("/packages/nonexistent-1.0.0.whl"),
+            test_context(),
+            test_artifacts(),
+        )
+        .unwrap();
+        assert_eq!(resp.status, 404);
+    }
+
+    #[test]
+    fn handle_request_unknown_path() {
+        let resp = PypiFormatHandler::handle_request(
+            get_request("/unknown/path"),
+            test_context(),
+            test_artifacts(),
+        )
+        .unwrap();
+        assert_eq!(resp.status, 404);
+    }
+
+    #[test]
+    fn handle_request_post_rejected() {
+        let req = HttpRequest {
+            method: "POST".to_string(),
+            path: "/simple/".to_string(),
+            query: String::new(),
+            headers: Vec::new(),
+            body: Vec::new(),
+        };
+        let resp =
+            PypiFormatHandler::handle_request(req, test_context(), test_artifacts()).unwrap();
+        assert_eq!(resp.status, 405);
     }
 }

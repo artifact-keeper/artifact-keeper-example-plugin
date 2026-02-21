@@ -16,11 +16,14 @@
 //! - `bash-completion-2.11-5.el9.noarch.rpm`
 
 wit_bindgen::generate!({
-    world: "format-plugin",
+    world: "format-plugin-v2",
     path: "../../wit/format-plugin.wit",
 });
 
-use exports::artifact_keeper::format::handler::{Guest, Metadata};
+use exports::artifact_keeper::format::handler::{Guest as HandlerGuest, Metadata};
+use exports::artifact_keeper::format::request_handler::{
+    Guest as RequestHandlerGuest, HttpRequest, HttpResponse, RepoContext,
+};
 
 /// RPM lead magic bytes: 0xed 0xab 0xee 0xdb
 const RPM_MAGIC: [u8; 4] = [0xed, 0xab, 0xee, 0xdb];
@@ -30,7 +33,7 @@ const RPM_LEAD_SIZE: usize = 96;
 
 struct RpmFormatHandler;
 
-impl Guest for RpmFormatHandler {
+impl HandlerGuest for RpmFormatHandler {
     fn format_key() -> String {
         "rpm-custom".to_string()
     }
@@ -143,11 +146,300 @@ impl Guest for RpmFormatHandler {
     }
 }
 
+impl RequestHandlerGuest for RpmFormatHandler {
+    fn handle_request(
+        request: HttpRequest,
+        context: RepoContext,
+        artifacts: Vec<Metadata>,
+    ) -> Result<HttpResponse, String> {
+        let path = request.path.as_str();
+
+        // Only handle GET and HEAD
+        if request.method != "GET" && request.method != "HEAD" {
+            return Ok(HttpResponse {
+                status: 405,
+                headers: vec![("allow".to_string(), "GET, HEAD".to_string())],
+                body: b"Method Not Allowed".to_vec(),
+            });
+        }
+
+        let trimmed = path.trim_end_matches('/');
+
+        // Route: /repodata/repomd.xml
+        if trimmed == "/repodata/repomd.xml" {
+            return handle_repomd_xml(&context, &artifacts);
+        }
+
+        // Route: /repodata/primary.xml.gz
+        if trimmed == "/repodata/primary.xml.gz" {
+            return handle_primary_xml_gz(&context, &artifacts);
+        }
+
+        // Route: /repodata/filelists.xml.gz
+        if trimmed == "/repodata/filelists.xml.gz" {
+            return handle_filelists_xml_gz();
+        }
+
+        // Route: /repodata/other.xml.gz
+        if trimmed == "/repodata/other.xml.gz" {
+            return handle_other_xml_gz();
+        }
+
+        // Route: /packages/{filename} or /Packages/{filename} - redirect to download
+        if let Some(filename) = trimmed
+            .strip_prefix("/packages/")
+            .or_else(|| trimmed.strip_prefix("/Packages/"))
+        {
+            if !filename.contains('/') && !filename.is_empty() {
+                return handle_package_download(filename, &context, &artifacts);
+            }
+        }
+
+        // 404 for everything else
+        Ok(HttpResponse {
+            status: 404,
+            headers: vec![("content-type".to_string(), "text/plain".to_string())],
+            body: b"Not Found".to_vec(),
+        })
+    }
+}
+
 export!(RpmFormatHandler);
+
+// ---------------------------------------------------------------------------
+// Request handler helpers
+// ---------------------------------------------------------------------------
+
+/// Generate repomd.xml pointing to the primary, filelists, and other metadata files.
+fn handle_repomd_xml(
+    _context: &RepoContext,
+    _artifacts: &[Metadata],
+) -> Result<HttpResponse, String> {
+    // Simple repomd.xml - in production you'd compute checksums of each data file,
+    // but for serving purposes we use a static structure with timestamps.
+    let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<repomd xmlns="http://linux.duke.edu/metadata/repo" xmlns:rpm="http://linux.duke.edu/metadata/rpm">
+  <revision>1</revision>
+  <data type="primary">
+    <location href="repodata/primary.xml.gz"/>
+  </data>
+  <data type="filelists">
+    <location href="repodata/filelists.xml.gz"/>
+  </data>
+  <data type="other">
+    <location href="repodata/other.xml.gz"/>
+  </data>
+</repomd>
+"#;
+
+    Ok(HttpResponse {
+        status: 200,
+        headers: vec![("content-type".to_string(), "application/xml".to_string())],
+        body: xml.as_bytes().to_vec(),
+    })
+}
+
+/// Generate primary.xml.gz with package entries.
+fn handle_primary_xml_gz(
+    _context: &RepoContext,
+    artifacts: &[Metadata],
+) -> Result<HttpResponse, String> {
+    let mut xml = String::from(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <metadata xmlns=\"http://linux.duke.edu/metadata/common\" \
+         xmlns:rpm=\"http://linux.duke.edu/metadata/rpm\" \
+         packages=\"",
+    );
+    xml.push_str(&artifacts.len().to_string());
+    xml.push_str("\">\n");
+
+    for artifact in artifacts {
+        let filename = artifact.path.rsplit('/').next().unwrap_or(&artifact.path);
+        let info = parse_rpm_filename(filename);
+
+        let name = info.name.as_deref().unwrap_or("unknown");
+        let version = info.version.as_deref().unwrap_or("0");
+        let release = info.release.as_deref().unwrap_or("0");
+        let arch = info.arch.as_deref().unwrap_or("x86_64");
+
+        xml.push_str("  <package type=\"rpm\">\n");
+        xml.push_str(&format!("    <name>{}</name>\n", xml_escape(name)));
+        xml.push_str(&format!("    <arch>{}</arch>\n", xml_escape(arch)));
+        xml.push_str(&format!(
+            "    <version epoch=\"0\" ver=\"{}\" rel=\"{}\"/>\n",
+            xml_escape(version),
+            xml_escape(release)
+        ));
+        xml.push_str(&format!(
+            "    <checksum type=\"sha256\" pkgid=\"YES\">{}</checksum>\n",
+            artifact.checksum_sha256.as_deref().unwrap_or("")
+        ));
+        xml.push_str("    <summary/>\n");
+        xml.push_str("    <description/>\n");
+        xml.push_str("    <packager/>\n");
+        xml.push_str("    <url/>\n");
+        xml.push_str(&format!(
+            "    <size package=\"{}\" installed=\"0\" archive=\"0\"/>\n",
+            artifact.size_bytes
+        ));
+        xml.push_str(&format!(
+            "    <location href=\"packages/{}\"/>\n",
+            xml_escape(filename)
+        ));
+        xml.push_str("    <format>\n");
+        xml.push_str(&format!(
+            "      <rpm:provides>\n        <rpm:entry name=\"{}\" flags=\"EQ\" epoch=\"0\" ver=\"{}\" rel=\"{}\"/>\n      </rpm:provides>\n",
+            xml_escape(name),
+            xml_escape(version),
+            xml_escape(release)
+        ));
+        xml.push_str("    </format>\n");
+        xml.push_str("  </package>\n");
+    }
+
+    xml.push_str("</metadata>\n");
+
+    // gzip the XML
+    let compressed = gzip_compress(xml.as_bytes())?;
+
+    Ok(HttpResponse {
+        status: 200,
+        headers: vec![("content-type".to_string(), "application/gzip".to_string())],
+        body: compressed,
+    })
+}
+
+/// Generate empty filelists.xml.gz.
+fn handle_filelists_xml_gz() -> Result<HttpResponse, String> {
+    let xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+               <filelists xmlns=\"http://linux.duke.edu/metadata/filelists\" packages=\"0\">\n\
+               </filelists>\n";
+
+    let compressed = gzip_compress(xml.as_bytes())?;
+
+    Ok(HttpResponse {
+        status: 200,
+        headers: vec![("content-type".to_string(), "application/gzip".to_string())],
+        body: compressed,
+    })
+}
+
+/// Generate empty other.xml.gz.
+fn handle_other_xml_gz() -> Result<HttpResponse, String> {
+    let xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+               <otherdata xmlns=\"http://linux.duke.edu/metadata/other\" packages=\"0\">\n\
+               </otherdata>\n";
+
+    let compressed = gzip_compress(xml.as_bytes())?;
+
+    Ok(HttpResponse {
+        status: 200,
+        headers: vec![("content-type".to_string(), "application/gzip".to_string())],
+        body: compressed,
+    })
+}
+
+/// Redirect package download to the artifact storage download endpoint.
+fn handle_package_download(
+    filename: &str,
+    context: &RepoContext,
+    artifacts: &[Metadata],
+) -> Result<HttpResponse, String> {
+    let artifact = artifacts
+        .iter()
+        .find(|a| a.path.rsplit('/').next().unwrap_or(&a.path) == filename);
+
+    match artifact {
+        Some(a) => {
+            let download_url = format!("{}/{}", context.download_base_url, a.path);
+            Ok(HttpResponse {
+                status: 302,
+                headers: vec![("location".to_string(), download_url)],
+                body: Vec::new(),
+            })
+        }
+        None => Ok(HttpResponse {
+            status: 404,
+            headers: vec![("content-type".to_string(), "text/plain".to_string())],
+            body: format!("Package '{}' not found", filename).into_bytes(),
+        }),
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Minimal gzip compression using the DEFLATE algorithm.
+///
+/// WASM plugins can't use libflate or flate2 easily, so we produce a valid
+/// gzip stream with STORED blocks (no actual compression, just framing).
+/// This is perfectly valid per RFC 1952 and all tools accept it.
+fn gzip_compress(data: &[u8]) -> Result<Vec<u8>, String> {
+    let mut output = Vec::with_capacity(data.len() + 64);
+
+    // Gzip header (10 bytes)
+    output.extend_from_slice(&[
+        0x1f, 0x8b, // magic
+        0x08, // method: deflate
+        0x00, // flags: none
+        0x00, 0x00, 0x00, 0x00, // mtime
+        0x00, // extra flags
+        0xff, // OS: unknown
+    ]);
+
+    // DEFLATE stored blocks
+    // Each stored block can hold up to 65535 bytes
+    let chunks: Vec<&[u8]> = if data.is_empty() {
+        vec![&[]]
+    } else {
+        data.chunks(65535).collect()
+    };
+
+    for (i, chunk) in chunks.iter().enumerate() {
+        let is_last = i == chunks.len() - 1;
+        // Block header: 1 byte (BFINAL=1 for last, BTYPE=00 for stored)
+        output.push(if is_last { 0x01 } else { 0x00 });
+        let len = chunk.len() as u16;
+        let nlen = !len;
+        output.extend_from_slice(&len.to_le_bytes());
+        output.extend_from_slice(&nlen.to_le_bytes());
+        output.extend_from_slice(chunk);
+    }
+
+    // CRC32 and original size (ISIZE)
+    let crc = crc32(data);
+    let size = data.len() as u32;
+    output.extend_from_slice(&crc.to_le_bytes());
+    output.extend_from_slice(&size.to_le_bytes());
+
+    Ok(output)
+}
+
+/// CRC32 (ISO 3309 / ITU-T V.42) used by gzip.
+fn crc32(data: &[u8]) -> u32 {
+    let mut crc: u32 = 0xFFFF_FFFF;
+    for &byte in data {
+        crc ^= byte as u32;
+        for _ in 0..8 {
+            if crc & 1 != 0 {
+                crc = (crc >> 1) ^ 0xEDB8_8320;
+            } else {
+                crc >>= 1;
+            }
+        }
+    }
+    !crc
+}
+
+/// Escape XML special characters.
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
 
 struct RpmFileInfo {
     name: Option<String>,
@@ -397,5 +689,186 @@ mod tests {
         let packages = json["packages"].as_array().unwrap();
         assert_eq!(packages[0]["name"], "nginx");
         assert_eq!(packages[0]["arch"], "x86_64");
+    }
+
+    // -- handle_request (repodata) --
+
+    fn test_context() -> RepoContext {
+        RepoContext {
+            repo_key: "rpm-test".to_string(),
+            base_url: "http://localhost:8080/ext/rpm-custom/rpm-test".to_string(),
+            download_base_url: "http://localhost:8080/api/v1/repositories/rpm-test/download"
+                .to_string(),
+        }
+    }
+
+    fn test_artifacts() -> Vec<Metadata> {
+        vec![
+            Metadata {
+                path: "nginx-1.24.0-1.el9.x86_64.rpm".into(),
+                version: Some("1.24.0-1.el9".into()),
+                content_type: "application/x-rpm".into(),
+                size_bytes: 8192,
+                checksum_sha256: Some("abc123def456".into()),
+            },
+            Metadata {
+                path: "bash-5.2.26-1.el9.x86_64.rpm".into(),
+                version: Some("5.2.26-1.el9".into()),
+                content_type: "application/x-rpm".into(),
+                size_bytes: 4096,
+                checksum_sha256: None,
+            },
+        ]
+    }
+
+    fn get_request(path: &str) -> HttpRequest {
+        HttpRequest {
+            method: "GET".to_string(),
+            path: path.to_string(),
+            query: String::new(),
+            headers: Vec::new(),
+            body: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn handle_request_repomd_xml() {
+        let resp = RpmFormatHandler::handle_request(
+            get_request("/repodata/repomd.xml"),
+            test_context(),
+            test_artifacts(),
+        )
+        .unwrap();
+        assert_eq!(resp.status, 200);
+        let body = String::from_utf8(resp.body).unwrap();
+        assert!(body.contains("<repomd"));
+        assert!(body.contains("primary.xml.gz"));
+        assert!(body.contains("filelists.xml.gz"));
+        assert!(body.contains("other.xml.gz"));
+    }
+
+    #[test]
+    fn handle_request_primary_xml_gz() {
+        let resp = RpmFormatHandler::handle_request(
+            get_request("/repodata/primary.xml.gz"),
+            test_context(),
+            test_artifacts(),
+        )
+        .unwrap();
+        assert_eq!(resp.status, 200);
+        // Verify it's valid gzip (magic bytes)
+        assert!(resp.body.len() > 10);
+        assert_eq!(resp.body[0], 0x1f);
+        assert_eq!(resp.body[1], 0x8b);
+    }
+
+    #[test]
+    fn handle_request_filelists_xml_gz() {
+        let resp = RpmFormatHandler::handle_request(
+            get_request("/repodata/filelists.xml.gz"),
+            test_context(),
+            test_artifacts(),
+        )
+        .unwrap();
+        assert_eq!(resp.status, 200);
+        assert_eq!(resp.body[0], 0x1f);
+        assert_eq!(resp.body[1], 0x8b);
+    }
+
+    #[test]
+    fn handle_request_other_xml_gz() {
+        let resp = RpmFormatHandler::handle_request(
+            get_request("/repodata/other.xml.gz"),
+            test_context(),
+            test_artifacts(),
+        )
+        .unwrap();
+        assert_eq!(resp.status, 200);
+        assert_eq!(resp.body[0], 0x1f);
+        assert_eq!(resp.body[1], 0x8b);
+    }
+
+    #[test]
+    fn handle_request_package_download_redirect() {
+        let resp = RpmFormatHandler::handle_request(
+            get_request("/packages/nginx-1.24.0-1.el9.x86_64.rpm"),
+            test_context(),
+            test_artifacts(),
+        )
+        .unwrap();
+        assert_eq!(resp.status, 302);
+        let location = resp.headers.iter().find(|(k, _)| k == "location").unwrap();
+        assert!(location
+            .1
+            .contains("/download/nginx-1.24.0-1.el9.x86_64.rpm"));
+    }
+
+    #[test]
+    fn handle_request_package_not_found() {
+        let resp = RpmFormatHandler::handle_request(
+            get_request("/packages/nonexistent-1.0.0-1.el9.x86_64.rpm"),
+            test_context(),
+            test_artifacts(),
+        )
+        .unwrap();
+        assert_eq!(resp.status, 404);
+    }
+
+    #[test]
+    fn handle_request_unknown_path() {
+        let resp = RpmFormatHandler::handle_request(
+            get_request("/unknown/path"),
+            test_context(),
+            test_artifacts(),
+        )
+        .unwrap();
+        assert_eq!(resp.status, 404);
+    }
+
+    #[test]
+    fn handle_request_post_rejected() {
+        let req = HttpRequest {
+            method: "POST".to_string(),
+            path: "/repodata/repomd.xml".to_string(),
+            query: String::new(),
+            headers: Vec::new(),
+            body: Vec::new(),
+        };
+        let resp = RpmFormatHandler::handle_request(req, test_context(), test_artifacts()).unwrap();
+        assert_eq!(resp.status, 405);
+    }
+
+    // -- gzip helpers --
+
+    #[test]
+    fn gzip_compress_produces_valid_header() {
+        let result = gzip_compress(b"hello").unwrap();
+        assert_eq!(result[0], 0x1f);
+        assert_eq!(result[1], 0x8b);
+        assert_eq!(result[2], 0x08); // deflate
+    }
+
+    #[test]
+    fn gzip_compress_empty_input() {
+        let result = gzip_compress(b"").unwrap();
+        assert!(result.len() > 10); // header + trailer at minimum
+        assert_eq!(result[0], 0x1f);
+        assert_eq!(result[1], 0x8b);
+    }
+
+    #[test]
+    fn crc32_known_value() {
+        // CRC32 of empty string is 0x00000000
+        assert_eq!(crc32(b""), 0x0000_0000);
+        // CRC32 of "123456789" is 0xCBF43926
+        assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
+    }
+
+    #[test]
+    fn xml_escape_special_chars() {
+        assert_eq!(
+            xml_escape("a<b>c&d\"e'f"),
+            "a&lt;b&gt;c&amp;d&quot;e&apos;f"
+        );
     }
 }

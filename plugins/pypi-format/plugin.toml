@@ -17,6 +17,7 @@ content_types = ["application/zip", "application/gzip"]
 parse_metadata = true
 validate_artifact = true
 generate_index = true
+handle_request = true
 
 [resources]
 max_memory_bytes = 16777216   # 16 MB
