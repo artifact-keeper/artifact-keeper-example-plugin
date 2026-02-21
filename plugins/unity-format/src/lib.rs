@@ -15,7 +15,7 @@
 
 wit_bindgen::generate!({
     world: "format-plugin",
-    path: "wit/format-plugin.wit",
+    path: "../../wit/format-plugin.wit",
 });
 
 use exports::artifact_keeper::format::handler::{Guest, Metadata};
