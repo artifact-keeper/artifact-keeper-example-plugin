@@ -11,6 +11,10 @@ jobs:
   build-and-release:
     name: Build & Publish
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      # Required for keyless (Sigstore OIDC) signing with cosign.
+      id-token: write
     steps:
       - uses: actions/checkout@v4
 
@@ -49,15 +53,68 @@ jobs:
           cp -r wit staging/pypi-format/
           cd staging/pypi-format && zip -r ../../pypi-format-plugin-${{ github.ref_name }}.zip .
 
+      - name: Generate SHA256 checksums
+        run: |
+          for f in *-plugin-${{ github.ref_name }}.zip; do
+            sha256sum "$f" > "$f.sha256"
+          done
+
+      # Pinned to a cosign v2 release: cosign v3 changed keyless sign-blob to
+      # bundle-only output (--bundle), dropping the .sig/.pem flow used below.
+      # Same pin as artifact-keeper-cli's release workflow.
+      - uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: "v2.6.3"
+
+      - name: Sign plugin archives (cosign keyless)
+        run: |
+          for f in *-plugin-${{ github.ref_name }}.zip; do
+            cosign sign-blob --yes \
+              --output-signature "${f}.sig" \
+              --output-certificate "${f}.pem" \
+              "$f"
+          done
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             unity-format-plugin-${{ github.ref_name }}.zip
+            unity-format-plugin-${{ github.ref_name }}.zip.sha256
+            unity-format-plugin-${{ github.ref_name }}.zip.sig
+            unity-format-plugin-${{ github.ref_name }}.zip.pem
             rpm-format-plugin-${{ github.ref_name }}.zip
+            rpm-format-plugin-${{ github.ref_name }}.zip.sha256
+            rpm-format-plugin-${{ github.ref_name }}.zip.sig
+            rpm-format-plugin-${{ github.ref_name }}.zip.pem
             pypi-format-plugin-${{ github.ref_name }}.zip
+            pypi-format-plugin-${{ github.ref_name }}.zip.sha256
+            pypi-format-plugin-${{ github.ref_name }}.zip.sig
+            pypi-format-plugin-${{ github.ref_name }}.zip.pem
           generate_release_notes: true
           body: |
+            ## Verifying downloads
+
+            Every plugin archive is signed with
+            [cosign](https://docs.sigstore.dev/cosign/signing/signing_with_blobs/)
+            (keyless, via this workflow's GitHub Actions OIDC identity) and
+            published with a `.sha256`, a `.sig` (signature) and a `.pem`
+            (signing certificate).
+
+            Artifact Keeper verifies plugin signatures on install, so verify
+            before you upload — e.g. for the Unity plugin:
+
+            ```sh
+            sha256sum -c unity-format-plugin-${{ github.ref_name }}.zip.sha256
+
+            cosign verify-blob \
+              --certificate unity-format-plugin-${{ github.ref_name }}.zip.pem \
+              --signature unity-format-plugin-${{ github.ref_name }}.zip.sig \
+              --certificate-identity "https://github.com/${{ github.repository }}/.github/workflows/release.yml@${{ github.ref }}" \
+              --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+              unity-format-plugin-${{ github.ref_name }}.zip
+            ```
+
             ## Install into Artifact Keeper
 
             Download a plugin ZIP below and upload it:
