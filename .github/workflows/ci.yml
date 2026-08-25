@@ -42,19 +42,19 @@ jobs:
         run: cargo build --release --target wasm32-wasip2 --workspace
 
       - name: Upload Unity plugin
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: unity-format-plugin
           path: target/wasm32-wasip2/release/unity_format_plugin.wasm
 
       - name: Upload RPM plugin
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: rpm-format-plugin
           path: target/wasm32-wasip2/release/rpm_format_plugin.wasm
 
       - name: Upload PyPI plugin
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pypi-format-plugin
           path: target/wasm32-wasip2/release/pypi_format_plugin.wasm
