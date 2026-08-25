@@ -60,6 +60,6 @@ jobs:
           path: target/wasm32-wasip2/release/pypi_format_plugin.wasm
 
       - name: SonarCloud Scan
-        uses: SonarSource/sonarqube-scan-action@v5
+        uses: SonarSource/sonarqube-scan-action@v8
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
