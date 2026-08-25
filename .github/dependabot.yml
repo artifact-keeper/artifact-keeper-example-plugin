@@ -1,0 +1,32 @@
+# Dependency monitoring for artifact-keeper-example-plugin.
+#
+# Modelled on the backend's .github/dependabot.yml, minus the parts that do
+# not apply here: the backend's RustCrypto/`digest` ignore block tracks a
+# migration that does not exist in this workspace, and its
+# `reviewers: artifact-keeper/maintainers` names a team that does not exist
+# in this org, so copying it would request review from nobody. Labels are
+# left to Dependabot's own `dependencies` default rather than naming custom
+# labels this repository does not define -- Dependabot silently drops labels
+# it cannot find.
+version: 2
+updates:
+  # Workflow actions. release.yml builds and signs the plugin archives that
+  # plugin consumers install into a registry, so a compromised action here
+  # reaches the artifacts other people run.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore"
+
+  # The Cargo workspace. The root manifest is `members = ["plugins/*"]`, so a
+  # single entry at "/" covers the unity-format, rpm-format and pypi-format
+  # plugin crates. These compile to the wasm32-wasip2 modules that are
+  # published and executed inside a registry's plugin sandbox.
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore"
