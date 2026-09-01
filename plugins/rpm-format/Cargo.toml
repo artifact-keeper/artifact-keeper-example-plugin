@@ -11,7 +11,7 @@ repository = "https://github.com/artifact-keeper/artifact-keeper-example-plugin"
 crate-type = ["cdylib"]
 
 [dependencies]
-wit-bindgen = "0.36"
+wit-bindgen = "0.61"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
