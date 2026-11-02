@@ -1,5 +1,12 @@
 # Artifact Keeper Example Plugins
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/artifact-keeper/.github/main/brand/logo-horizontal-dark.png">
+    <img alt="Artifact Keeper" src="https://raw.githubusercontent.com/artifact-keeper/.github/main/brand/logo-horizontal-light.png" width="360">
+  </picture>
+</p>
+
 A collection of working example plugins for [Artifact Keeper](https://github.com/artifact-keeper/artifact-keeper). Each plugin implements a custom format handler using the WASM Component Model and the `artifact-keeper:format@1.0.0` WIT contract.
 
 Use these as starting points for building your own plugins. Fork, change the format key, and implement your logic.
